@@ -4,11 +4,7 @@ import { useState, useEffect, useMemo, useContext } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { ArrowDown, Loader2, RefreshCw, Settings } from "lucide-react";
-import {
-  PublicKey,
-  Transaction,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
+import { PublicKey, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +34,8 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { useJupiterTrade } from "@/hook/murphy/use-JupiterTrade";
 import { ModalContext } from "@/components/providers/wallet-provider";
+import type { TxnStep } from "@/types/transaction";
+import { StepFlowDialog } from "./Txn-Feedback/step-flow-dialog";
 
 declare global {
   interface Window {
@@ -58,10 +56,10 @@ export type TokenInfo = {
 
 // Quote result interface - must match the result from Jupiter API
 interface QuoteResult {
-  outputAmount: string;    // Amount of tokens received
-  exchangeRate: number;    // Exchange rate
-  priceImpactPct: number;  // Price impact (%)
-  routeInfo: any;          // Route information
+  outputAmount: string; // Amount of tokens received
+  exchangeRate: number; // Exchange rate
+  priceImpactPct: number; // Price impact (%)
+  routeInfo: any; // Route information
 }
 
 // Type for swap form values
@@ -94,7 +92,11 @@ const customResolver = (data: any) => {
   }
 
   // Validate amount
-  if (data.amountIn === undefined || data.amountIn === null || data.amountIn === "") {
+  if (
+    data.amountIn === undefined ||
+    data.amountIn === null ||
+    data.amountIn === ""
+  ) {
     errors.amountIn = {
       type: "required",
       message: "Amount is required",
@@ -130,8 +132,12 @@ export function SwapForm({
 }: SwapFormProps) {
   // State variables
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedTokenIn, setSelectedTokenIn] = useState<TokenInfo | null>(null);
-  const [selectedTokenOut, setSelectedTokenOut] = useState<TokenInfo | null>(null);
+  const [selectedTokenIn, setSelectedTokenIn] = useState<TokenInfo | null>(
+    null
+  );
+  const [selectedTokenOut, setSelectedTokenOut] = useState<TokenInfo | null>(
+    null
+  );
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
   const [isUpdatingBalance, setIsUpdatingBalance] = useState(false);
   const [isLoadingQuote, setIsLoadingQuote] = useState(false);
@@ -140,7 +146,36 @@ export function SwapForm({
   const [amountOutValue, setAmountOutValue] = useState<string>("");
   const [slippageValue, setSlippageValue] = useState<number>(0.5); // 0.5% default
   const [slippageSettingsOpen, setSlippageSettingsOpen] = useState(false);
-  
+  // StepFlowDialog UI state
+  const [showDialog, setShowDialog] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [swapSteps, setSwapSteps] = useState<TxnStep[]>([
+    {
+      id: "1",
+      title: "Get Quote",
+      description: "Calculate swap rates and fees",
+      status: "pending",
+    },
+    {
+      id: "2",
+      title: "Approve Spending",
+      description: "Approve token spending limit",
+      status: "pending",
+    },
+    {
+      id: "3",
+      title: "Execute Swap",
+      description: "Perform the token exchange",
+      status: "pending",
+    },
+    {
+      id: "4",
+      title: "Complete",
+      description: "Swap completed!",
+      status: "pending",
+    },
+  ]);
+
   const { publicKey, connected, sendTransaction, wallet } = useWallet();
   const { connection } = useConnection();
   const { executeTrade, getQuote } = useJupiterTrade();
@@ -155,8 +190,8 @@ export function SwapForm({
       amountOut: undefined,
       slippage: 0.5,
     },
-    mode: "onSubmit",  // Only validate on submit
-    resolver: customResolver,  // Use our custom resolver
+    mode: "onSubmit", // Only validate on submit
+    resolver: customResolver, // Use our custom resolver
   });
 
   // Available tokens state
@@ -199,33 +234,34 @@ export function SwapForm({
       // Get SOL balance
       let solBalance = 0;
       try {
-        if(!connection){
+        if (!connection) {
           throw new Error("No connection available");
         }
-        solBalance = (await connection.getBalance(ownerPublicKey)) / LAMPORTS_PER_SOL;
+        solBalance =
+          (await connection.getBalance(ownerPublicKey)) / LAMPORTS_PER_SOL;
 
         let retryCount = 0;
         const maxRetries = 3;
 
         while (retryCount < maxRetries) {
           try {
-            solBalance = (await
-              connection.getBalance(ownerPublicKey)) / LAMPORTS_PER_SOL;
-              break;
-            } catch (error: any) {
-              retryCount++;
-              if (retryCount === maxRetries) {
-                throw error;
-              }
-
-              await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for 1 second before retrying
+            solBalance =
+              (await connection.getBalance(ownerPublicKey)) / LAMPORTS_PER_SOL;
+            break;
+          } catch (error: any) {
+            retryCount++;
+            if (retryCount === maxRetries) {
+              throw error;
             }
+
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for 1 second before retrying
           }
+        }
       } catch (error: any) {
         console.error("Error fetching SOL balance:", error);
         toast.error("Failed to fetch SOL balance", {
           description: error?.message || "Please check your wallet connection",
-        })
+        });
       }
 
       // Extended default tokens list
@@ -256,7 +292,7 @@ export function SwapForm({
           decimals: 6,
           mintAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
           icon: "/crypto-logos/tether-usdt-logo.svg",
-        }
+        },
       ];
 
       // Fetch SPL tokens using the provider connection
@@ -349,26 +385,29 @@ export function SwapForm({
       e.preventDefault();
       e.stopPropagation();
     }
-    
+
     if (selectedTokenIn && selectedTokenIn.balance > 0) {
       // If SOL is selected, keep 0.01 SOL for transaction fees
       let maxAmount: number;
-      
-      if (selectedTokenIn.id === "sol" || 
-          selectedTokenIn.mintAddress === "So11111111111111111111111111111111111111112") {
+
+      if (
+        selectedTokenIn.id === "sol" ||
+        selectedTokenIn.mintAddress ===
+          "So11111111111111111111111111111111111111112"
+      ) {
         // Keep 0.05 SOL for transaction fees, enough for most transactions
         maxAmount = Math.max(selectedTokenIn.balance - 0.05, 0);
       } else {
         maxAmount = selectedTokenIn.balance;
       }
-      
+
       setAmountInValue(maxAmount.toString());
       form.setValue("amountIn", maxAmount, {
         shouldValidate: false,
         shouldDirty: true,
         shouldTouch: true,
       });
-      
+
       // If the output token is selected, wait a bit before getting the quote
       if (selectedTokenOut && maxAmount > 0) {
         setTimeout(() => {
@@ -383,9 +422,9 @@ export function SwapForm({
     setAmountInValue(value);
     const parsedValue = value === "" ? undefined : parseFloat(value);
     form.setValue("amountIn", parsedValue, {
-      shouldValidate: false  // Prevent validation
+      shouldValidate: false, // Prevent validation
     });
-    
+
     if (!parsedValue || parsedValue <= 0) {
       setAmountOutValue("");
       setQuoteResult(null);
@@ -396,20 +435,25 @@ export function SwapForm({
     if (inputTimeout) {
       clearTimeout(inputTimeout);
     }
-    
+
     // Automatically update the quote after the user stops typing for 500ms
     if (parsedValue && parsedValue > 0 && selectedTokenIn && selectedTokenOut) {
       const newTimeout = setTimeout(() => {
         fetchSwapQuote(parsedValue, false);
       }, 500);
-      
+
       setInputTimeout(newTimeout);
     }
   };
 
   // Add blur event handler to ensure update when user loses focus
   const handleAmountInBlur = () => {
-    if (amountInValue && parseFloat(amountInValue) > 0 && selectedTokenIn && selectedTokenOut) {
+    if (
+      amountInValue &&
+      parseFloat(amountInValue) > 0 &&
+      selectedTokenIn &&
+      selectedTokenOut
+    ) {
       fetchSwapQuote(parseFloat(amountInValue), false);
     }
   };
@@ -417,9 +461,9 @@ export function SwapForm({
   // Handle token change
   const handleTokenChange = (isInput: boolean, tokenId: string) => {
     const token = availableTokens.find((t) => t.id === tokenId);
-    
+
     if (!token) return;
-    
+
     if (isInput) {
       if (selectedTokenOut && token.id === selectedTokenOut.id) {
         toast.error("Cannot select the same token", {
@@ -427,10 +471,10 @@ export function SwapForm({
         });
         return;
       }
-      
+
       setSelectedTokenIn(token);
       form.setValue("tokenIn", token.id, {
-        shouldValidate: false  // Prevent validation
+        shouldValidate: false, // Prevent validation
       });
     } else {
       if (selectedTokenIn && token.id === selectedTokenIn.id) {
@@ -439,13 +483,13 @@ export function SwapForm({
         });
         return;
       }
-      
+
       setSelectedTokenOut(token);
       form.setValue("tokenOut", token.id, {
-        shouldValidate: false  // Prevent validation
+        shouldValidate: false, // Prevent validation
       });
     }
-    
+
     // Clear amounts and re-quote if we have an input amount
     if (amountInValue && parseFloat(amountInValue) > 0) {
       fetchSwapQuote(parseFloat(amountInValue), false);
@@ -456,7 +500,7 @@ export function SwapForm({
   const handleSlippageChange = (value: number) => {
     setSlippageValue(value);
     form.setValue("slippage", value, {
-      shouldValidate: false  // Prevent validation
+      shouldValidate: false, // Prevent validation
     });
   };
 
@@ -465,59 +509,62 @@ export function SwapForm({
     // Swap token selections
     const tempTokenIn = selectedTokenIn;
     const tempTokenOut = selectedTokenOut;
-    
+
     setSelectedTokenIn(tempTokenOut);
     setSelectedTokenOut(tempTokenIn);
-    
+
     if (tempTokenOut) {
       form.setValue("tokenIn", tempTokenOut.id, {
-        shouldValidate: false  // Prevent validation
+        shouldValidate: false, // Prevent validation
       });
     }
-    
+
     if (tempTokenIn) {
       form.setValue("tokenOut", tempTokenIn.id, {
-        shouldValidate: false  // Prevent validation
+        shouldValidate: false, // Prevent validation
       });
     }
-    
+
     // Clear amounts and re-quote if needed
     setAmountInValue("");
     setAmountOutValue("");
     form.setValue("amountIn", undefined, {
-      shouldValidate: false  // Prevent validation
+      shouldValidate: false, // Prevent validation
     });
     form.setValue("amountOut", undefined, {
-      shouldValidate: false  // Prevent validation
+      shouldValidate: false, // Prevent validation
     });
     setQuoteResult(null);
   };
 
   // Fetch swap quote
-  const fetchSwapQuote = async (amount: number, isFromMaxButton: boolean = false) => {
+  const fetchSwapQuote = async (
+    amount: number,
+    isFromMaxButton: boolean = false
+  ) => {
     if (!connected || !publicKey) {
-      toast.error("Wallet not connected", { 
-        description: "Please connect your wallet to get a quote" 
+      toast.error("Wallet not connected", {
+        description: "Please connect your wallet to get a quote",
       });
       return;
     }
-  
+
     if (!selectedTokenIn || !selectedTokenOut) {
-      toast.error("Select tokens", { 
-        description: "Please select input and output tokens" 
+      toast.error("Select tokens", {
+        description: "Please select input and output tokens",
       });
       return;
     }
-  
+
     if (amount <= 0) {
       setAmountOutValue("");
       setQuoteResult(null);
       return;
     }
-  
+
     try {
       setIsLoadingQuote(true);
-  
+
       // Check token address
       if (!selectedTokenIn.mintAddress || !selectedTokenOut.mintAddress) {
         throw new Error("Token mintAddress not found");
@@ -527,7 +574,7 @@ export function SwapForm({
       const inputMint = new PublicKey(selectedTokenIn.mintAddress);
       const outputMint = new PublicKey(selectedTokenOut.mintAddress);
       const slippageBps = Math.floor(slippageValue * 100);
-      
+
       // Call API to get quote
       const quoteResponse = await getQuote(
         outputMint,
@@ -535,26 +582,26 @@ export function SwapForm({
         inputMint,
         slippageBps
       );
-  
+
       if (quoteResponse) {
         // Update state with result from API
         setQuoteResult(quoteResponse);
         setAmountOutValue(quoteResponse.outputAmount);
         form.setValue("amountOut", Number(quoteResponse.outputAmount), {
-          shouldValidate: false
+          shouldValidate: false,
         });
       } else {
         setQuoteResult(null);
         setAmountOutValue("");
         form.setValue("amountOut", undefined, {
-          shouldValidate: false
+          shouldValidate: false,
         });
       }
     } catch (error: any) {
       setQuoteResult(null);
       setAmountOutValue("");
       toast.error("Failed to get quote", {
-        description: error?.message || "Unable to fetch quote from Jupiter"
+        description: error?.message || "Unable to fetch quote from Jupiter",
       });
     } finally {
       setIsLoadingQuote(false);
@@ -595,33 +642,37 @@ export function SwapForm({
 
     try {
       setIsSubmitting(true);
-      
+
       // Check token address
       if (!selectedTokenIn.mintAddress || !selectedTokenOut.mintAddress) {
         throw new Error("Token mintAddress not found");
       }
-      
+
       // Create PublicKey from address
       const inputMint = new PublicKey(selectedTokenIn.mintAddress);
       const outputMint = new PublicKey(selectedTokenOut.mintAddress);
       const slippageBps = Math.floor(slippageValue * 100);
-      
+
       // Log transaction information for debugging
       console.log("=== Transaction Information ===");
       console.log("Endpoint:", endpoint);
       console.log("Input token:", selectedTokenIn.symbol, inputMint.toString());
-      console.log("Output token:", selectedTokenOut.symbol, outputMint.toString());
+      console.log(
+        "Output token:",
+        selectedTokenOut.symbol,
+        outputMint.toString()
+      );
       console.log("Amount:", values.amountIn);
       console.log("Slippage:", slippageBps, "bps");
       console.log("Wallet connected:", connected ? "Yes" : "No");
       console.log("PublicKey:", publicKey.toString());
       console.log("========================");
-      
+
       // Check all parameters before executing the transaction
       if (!wallet) {
         throw new Error("Wallet not connected");
       }
-      
+
       try {
         // Execute the swap transaction with proper validation
         console.log("Calling executeTrade with parameters:");
@@ -629,11 +680,18 @@ export function SwapForm({
         console.log(" - inputAmount:", values.amountIn);
         console.log(" - inputMint:", inputMint.toString());
         console.log(" - slippageBps:", slippageBps);
-        console.log(" - wallet:", typeof wallet, wallet ? "connected" : "not connected");
-        
+        console.log(
+          " - wallet:",
+          typeof wallet,
+          wallet ? "connected" : "not connected"
+        );
+
         // Check if wallet supports signTransaction method
         const walletAdapter = wallet as any;
-        console.log(" - wallet supports signTransaction:", walletAdapter?.signTransaction ? "yes" : "no");
+        console.log(
+          " - wallet supports signTransaction:",
+          walletAdapter?.signTransaction ? "yes" : "no"
+        );
         console.log(" - endpoint:", endpoint);
 
         // Pass fewer parameters, compatible with new API
@@ -643,22 +701,22 @@ export function SwapForm({
           inputMint,
           slippageBps
         );
-  
+
         toast.success("Swap successful!", {
-          description: `Transaction: ${signature}`
+          description: `Transaction: ${signature}`,
         });
-  
+
         // Reset form and update balances
         setAmountInValue("");
         setAmountOutValue("");
         form.setValue("amountIn", undefined, {
-          shouldValidate: false
+          shouldValidate: false,
         });
         form.setValue("amountOut", undefined, {
-          shouldValidate: false
+          shouldValidate: false,
         });
         setQuoteResult(null);
-  
+
         // Update balances after successful swap
         if (publicKey) {
           await updateBalances();
@@ -666,13 +724,13 @@ export function SwapForm({
       } catch (tradeError: any) {
         console.error("Trade execution error:", tradeError);
         toast.error("Transaction failed", {
-          description: tradeError.message || "Unable to execute transaction"
+          description: tradeError.message || "Unable to execute transaction",
         });
       }
     } catch (error: any) {
       console.error("Swap error:", error);
       toast.error("Swap failed", {
-        description: error.message || "Transaction failed"
+        description: error.message || "Transaction failed",
       });
     } finally {
       setIsSubmitting(false);
@@ -683,14 +741,18 @@ export function SwapForm({
   const updateSelectedTokenBalances = (updatedTokens: TokenInfo[]) => {
     // Update selected token balances if they exist in the updated tokens list
     if (selectedTokenIn) {
-      const updatedTokenIn = updatedTokens.find(t => t.id === selectedTokenIn.id);
+      const updatedTokenIn = updatedTokens.find(
+        (t) => t.id === selectedTokenIn.id
+      );
       if (updatedTokenIn) {
         setSelectedTokenIn(updatedTokenIn);
       }
     }
-    
+
     if (selectedTokenOut) {
-      const updatedTokenOut = updatedTokens.find(t => t.id === selectedTokenOut.id);
+      const updatedTokenOut = updatedTokens.find(
+        (t) => t.id === selectedTokenOut.id
+      );
       if (updatedTokenOut) {
         setSelectedTokenOut(updatedTokenOut);
       }
@@ -744,337 +806,433 @@ export function SwapForm({
   );
 
   return (
-    <Card className={className}>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>Swap Tokens</span>
-          <Popover open={slippageSettingsOpen} onOpenChange={setSlippageSettingsOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <Settings className="h-5 w-5" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-80">
-              <div className="space-y-4">
-                <h4 className="font-medium">Slippage Tolerance</h4>
-                <div className="flex items-center justify-between gap-2">
-                  <Button 
-                    variant={slippageValue === 0.1 ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => handleSlippageChange(0.1)}
-                    className="flex-1"
-                  >
-                    0.1%
-                  </Button>
-                  <Button 
-                    variant={slippageValue === 0.5 ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => handleSlippageChange(0.5)}
-                    className="flex-1"
-                  >
-                    0.5%
-                  </Button>
-                  <Button 
-                    variant={slippageValue === 1 ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => handleSlippageChange(1)}
-                    className="flex-1"
-                  >
-                    1.0%
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Custom: {slippageValue.toFixed(1)}%</span>
-                  </div>
-                  <Slider
-                    value={[slippageValue]}
-                    min={0.1}
-                    max={5}
-                    step={0.1}
-                    onValueChange={(value) => handleSlippageChange(value[0])}
-                  />
-                  {slippageValue > 3 && (
-                    <p className="text-yellow-500 text-sm">
-                      High slippage increases the risk of price impact
-                    </p>
-                  )}
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Form {...form}>
-          <form 
-            onSubmit={(e) => {
-              // Check if clicking MAX button then do not submit
-              const target = e.target as HTMLElement;
-              const maxButton = target.querySelector('.max-button');
-              if (maxButton && (maxButton === document.activeElement || maxButton.contains(document.activeElement as Node))) {
-                e.preventDefault();
-                return;
-              }
-              
-              e.preventDefault();
-              form.handleSubmit(onSubmit)(e);
-            }}
-            className="space-y-4"
-          >
-            {/* Token Input Field */}
-            <div className="space-y-2">
-              <FormField
-                control={form.control}
-                name="tokenIn"
-                render={({ field }) => (
-                  <FormItem className="bg-secondary/50 rounded-lg p-4">
-                    <div className="flex justify-between items-center">
-                      <FormLabel>You Pay</FormLabel>
-                      {selectedTokenIn && showTokenBalance && (
-                        <div className="flex items-center text-xs text-muted-foreground space-x-1">
-                          <span>
-                            Balance: {selectedTokenIn.balance.toLocaleString(undefined, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: selectedTokenIn.decimals > 6 ? 6 : selectedTokenIn.decimals,
-                            })}
-                          </span>
-                          <div className="max-button-container" onClick={(e) => e.stopPropagation()}>
-                            <span 
-                              className="cursor-pointer h-auto py-0 px-2 text-xs text-primary hover:underline max-button" 
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleUseMax();
-                              }}
-                            >
-                              MAX
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-2 mt-2">
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="0.0"
-                          step="any"
-                          value={amountInValue}
-                          onChange={(e) => handleAmountInChange(e.target.value)}
-                          onBlur={handleAmountInBlur}
-                          disabled={!connected || !selectedTokenIn}
-                          className="bg-transparent border-none text-xl font-medium placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-                        />
-                      </FormControl>
-                      <Select
-                        onValueChange={(value) => handleTokenChange(true, value)}
-                        value={field.value}
-                        disabled={!connected}
-                      >
-                        <FormControl>
-                          <SelectTrigger className="min-w-[140px] h-auto bg-background">
-                            <SelectValue
-                              placeholder={
-                                isLoadingTokens || isUpdatingBalance
-                                  ? "Loading..."
-                                  : "Select"
-                              }
-                            >
-                              {selectedTokenIn && (
-                                <div className="flex items-center">
-                                  {selectedTokenIn.icon && (
-                                    <img
-                                      src={selectedTokenIn.icon}
-                                      alt={selectedTokenIn.symbol}
-                                      className="w-5 h-5 mr-2 rounded-full"
-                                    />
-                                  )}
-                                  {selectedTokenIn.symbol}
-                                </div>
-                              )}
-                            </SelectValue>
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {isLoadingTokens || isUpdatingBalance ? (
-                            <div className="flex items-center justify-center p-2">
-                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                              <span>
-                                {isUpdatingBalance
-                                  ? "Updating balances..."
-                                  : "Loading tokens..."}
-                              </span>
-                            </div>
-                          ) : availableTokens.length > 0 ? (
-                            <SelectGroup>
-                              {availableTokens.map(renderTokenItem)}
-                            </SelectGroup>
-                          ) : (
-                            <div className="p-2 text-muted-foreground text-center">
-                              No tokens found
-                            </div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              {/* Arrow button to switch tokens */}
-              <div className="flex justify-center -my-2 relative z-10">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-full h-10 w-10 bg-background border-background shadow-md"
-                  onClick={handleSwitchTokens}
-                  disabled={!selectedTokenIn || !selectedTokenOut}
-                >
-                  <ArrowDown className="h-4 w-4" />
+    <>
+      <Card className={className}>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Swap Tokens</span>
+            <Popover
+              open={slippageSettingsOpen}
+              onOpenChange={setSlippageSettingsOpen}
+            >
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <Settings className="h-5 w-5" />
                 </Button>
-              </div>
-
-              {/* Token Output Field */}
-              <FormField
-                control={form.control}
-                name="tokenOut"
-                render={({ field }) => (
-                  <FormItem className="bg-secondary/50 rounded-lg p-4">
-                    <div className="flex justify-between items-center">
-                      <FormLabel>You Receive</FormLabel>
-                      {selectedTokenOut && showTokenBalance && (
-                        <div className="text-xs text-muted-foreground">
-                          Balance: {selectedTokenOut.balance.toLocaleString(undefined, {
-                            minimumFractionDigits: 0,
-                            maximumFractionDigits: selectedTokenOut.decimals > 6 ? 6 : selectedTokenOut.decimals,
-                          })}
-                        </div>
-                      )}
+              </PopoverTrigger>
+              <PopoverContent className="w-80">
+                <div className="space-y-4">
+                  <h4 className="font-medium">Slippage Tolerance</h4>
+                  <div className="flex items-center justify-between gap-2">
+                    <Button
+                      variant={slippageValue === 0.1 ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleSlippageChange(0.1)}
+                      className="flex-1"
+                    >
+                      0.1%
+                    </Button>
+                    <Button
+                      variant={slippageValue === 0.5 ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleSlippageChange(0.5)}
+                      className="flex-1"
+                    >
+                      0.5%
+                    </Button>
+                    <Button
+                      variant={slippageValue === 1 ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleSlippageChange(1)}
+                      className="flex-1"
+                    >
+                      1.0%
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span>Custom: {slippageValue.toFixed(1)}%</span>
                     </div>
-                    <div className="flex items-center space-x-2 mt-2">
-                      <FormControl>
-                        <Input
-                          type="text"
-                          placeholder="0.0"
-                          value={amountOutValue}
-                          disabled={true} // Always disabled - calculated from input
-                          className="bg-transparent border-none text-xl font-medium placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-                        />
-                      </FormControl>
-                      <Select
-                        onValueChange={(value) => handleTokenChange(false, value)}
-                        value={field.value}
-                        disabled={!connected}
-                      >
-                        <FormControl>
-                          <SelectTrigger className="min-w-[140px] h-auto bg-background">
-                            <SelectValue
-                              placeholder={
-                                isLoadingTokens || isUpdatingBalance
-                                  ? "Loading..."
-                                  : "Select"
-                              }
-                            >
-                              {selectedTokenOut && (
-                                <div className="flex items-center">
-                                  {selectedTokenOut.icon && (
-                                    <img
-                                      src={selectedTokenOut.icon}
-                                      alt={selectedTokenOut.symbol}
-                                      className="w-5 h-5 mr-2 rounded-full"
-                                    />
-                                  )}
-                                  {selectedTokenOut.symbol}
-                                </div>
+                    <Slider
+                      value={[slippageValue]}
+                      min={0.1}
+                      max={5}
+                      step={0.1}
+                      onValueChange={(value) => handleSlippageChange(value[0])}
+                    />
+                    {slippageValue > 3 && (
+                      <p className="text-yellow-500 text-sm">
+                        High slippage increases the risk of price impact
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Form {...form}>
+            <form
+              onSubmit={(e) => {
+                // Check if clicking MAX button then do not submit
+                const target = e.target as HTMLElement;
+                const maxButton = target.querySelector(".max-button");
+                if (
+                  maxButton &&
+                  (maxButton === document.activeElement ||
+                    maxButton.contains(document.activeElement as Node))
+                ) {
+                  e.preventDefault();
+                  return;
+                }
+
+                e.preventDefault();
+                form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-4"
+            >
+              {/* Token Input Field */}
+              <div className="space-y-2">
+                <FormField
+                  control={form.control}
+                  name="tokenIn"
+                  render={({ field }) => (
+                    <FormItem className="bg-secondary/50 rounded-lg p-4">
+                      <div className="flex justify-between items-center">
+                        <FormLabel>You Pay</FormLabel>
+                        {selectedTokenIn && showTokenBalance && (
+                          <div className="flex items-center text-xs text-muted-foreground space-x-1">
+                            <span>
+                              Balance:{" "}
+                              {selectedTokenIn.balance.toLocaleString(
+                                undefined,
+                                {
+                                  minimumFractionDigits: 0,
+                                  maximumFractionDigits:
+                                    selectedTokenIn.decimals > 6
+                                      ? 6
+                                      : selectedTokenIn.decimals,
+                                }
                               )}
-                            </SelectValue>
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {isLoadingTokens || isUpdatingBalance ? (
-                            <div className="flex items-center justify-center p-2">
-                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                              <span>
-                                {isUpdatingBalance
-                                  ? "Updating balances..."
-                                  : "Loading tokens..."}
+                            </span>
+                            <div
+                              className="max-button-container"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span
+                                className="cursor-pointer h-auto py-0 px-2 text-xs text-primary hover:underline max-button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleUseMax();
+                                }}
+                              >
+                                MAX
                               </span>
                             </div>
-                          ) : availableTokens.length > 0 ? (
-                            <SelectGroup>
-                              {availableTokens.map(renderTokenItem)}
-                            </SelectGroup>
-                          ) : (
-                            <div className="p-2 text-muted-foreground text-center">
-                              No tokens found
-                            </div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            {/* Add swap button section */}
-            <div className="pt-2">
-              {!connected ? (
-                <ConnectWalletButton className="w-full" />
-              ) : (
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={
-                    isSubmitting ||
-                    isLoading ||
-                    !selectedTokenIn ||
-                    !selectedTokenOut ||
-                    !amountInValue ||
-                    parseFloat
-                    (amountInValue) <= 0 || 
-                    isLoadingQuote
-                  }
-                  >
-                  {isSubmitting || isLoading? (
-                    <>
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Swapping...
-                    </>
-                  ) : (
-                    "Swap"
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-2 mt-2">
+                        <FormControl>
+                          <Input
+                            type="number"
+                            placeholder="0.0"
+                            step="any"
+                            value={amountInValue}
+                            onChange={(e) =>
+                              handleAmountInChange(e.target.value)
+                            }
+                            onBlur={handleAmountInBlur}
+                            disabled={!connected || !selectedTokenIn}
+                            className="bg-transparent border-none text-xl font-medium placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
+                        </FormControl>
+                        <Select
+                          onValueChange={(value) =>
+                            handleTokenChange(true, value)
+                          }
+                          value={field.value}
+                          disabled={!connected}
+                        >
+                          <FormControl>
+                            <SelectTrigger className="min-w-[140px] h-auto bg-background">
+                              <SelectValue
+                                placeholder={
+                                  isLoadingTokens || isUpdatingBalance
+                                    ? "Loading..."
+                                    : "Select"
+                                }
+                              >
+                                {selectedTokenIn && (
+                                  <div className="flex items-center">
+                                    {selectedTokenIn.icon && (
+                                      <img
+                                        src={selectedTokenIn.icon}
+                                        alt={selectedTokenIn.symbol}
+                                        className="w-5 h-5 mr-2 rounded-full"
+                                      />
+                                    )}
+                                    {selectedTokenIn.symbol}
+                                  </div>
+                                )}
+                              </SelectValue>
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {isLoadingTokens || isUpdatingBalance ? (
+                              <div className="flex items-center justify-center p-2">
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                <span>
+                                  {isUpdatingBalance
+                                    ? "Updating balances..."
+                                    : "Loading tokens..."}
+                                </span>
+                              </div>
+                            ) : availableTokens.length > 0 ? (
+                              <SelectGroup>
+                                {availableTokens.map(renderTokenItem)}
+                              </SelectGroup>
+                            ) : (
+                              <div className="p-2 text-muted-foreground text-center">
+                                No tokens found
+                              </div>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
                   )}
+                />
+
+                {/* Arrow button to switch tokens */}
+                <div className="flex justify-center -my-2 relative z-10">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="rounded-full h-10 w-10 bg-background border-background shadow-md"
+                    onClick={handleSwitchTokens}
+                    disabled={!selectedTokenIn || !selectedTokenOut}
+                  >
+                    <ArrowDown className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {/* Token Output Field */}
+                <FormField
+                  control={form.control}
+                  name="tokenOut"
+                  render={({ field }) => (
+                    <FormItem className="bg-secondary/50 rounded-lg p-4">
+                      <div className="flex justify-between items-center">
+                        <FormLabel>You Receive</FormLabel>
+                        {selectedTokenOut && showTokenBalance && (
+                          <div className="text-xs text-muted-foreground">
+                            Balance:{" "}
+                            {selectedTokenOut.balance.toLocaleString(
+                              undefined,
+                              {
+                                minimumFractionDigits: 0,
+                                maximumFractionDigits:
+                                  selectedTokenOut.decimals > 6
+                                    ? 6
+                                    : selectedTokenOut.decimals,
+                              }
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-2 mt-2">
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="0.0"
+                            value={amountOutValue}
+                            disabled={true} // Always disabled - calculated from input
+                            className="bg-transparent border-none text-xl font-medium placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
+                        </FormControl>
+                        <Select
+                          onValueChange={(value) =>
+                            handleTokenChange(false, value)
+                          }
+                          value={field.value}
+                          disabled={!connected}
+                        >
+                          <FormControl>
+                            <SelectTrigger className="min-w-[140px] h-auto bg-background">
+                              <SelectValue
+                                placeholder={
+                                  isLoadingTokens || isUpdatingBalance
+                                    ? "Loading..."
+                                    : "Select"
+                                }
+                              >
+                                {selectedTokenOut && (
+                                  <div className="flex items-center">
+                                    {selectedTokenOut.icon && (
+                                      <img
+                                        src={selectedTokenOut.icon}
+                                        alt={selectedTokenOut.symbol}
+                                        className="w-5 h-5 mr-2 rounded-full"
+                                      />
+                                    )}
+                                    {selectedTokenOut.symbol}
+                                  </div>
+                                )}
+                              </SelectValue>
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {isLoadingTokens || isUpdatingBalance ? (
+                              <div className="flex items-center justify-center p-2">
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                <span>
+                                  {isUpdatingBalance
+                                    ? "Updating balances..."
+                                    : "Loading tokens..."}
+                                </span>
+                              </div>
+                            ) : availableTokens.length > 0 ? (
+                              <SelectGroup>
+                                {availableTokens.map(renderTokenItem)}
+                              </SelectGroup>
+                            ) : (
+                              <div className="p-2 text-muted-foreground text-center">
+                                No tokens found
+                              </div>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              {/* Add swap button section */}
+              <div className="pt-2">
+                {!connected ? (
+                  <ConnectWalletButton className="w-full" />
+                ) : (
+                  <Button
+                    type="button"
+                    className="w-full"
+                    disabled={
+                      isSubmitting ||
+                      isLoading ||
+                      !selectedTokenIn ||
+                      !selectedTokenOut ||
+                      !amountInValue ||
+                      parseFloat(amountInValue) <= 0 ||
+                      isLoadingQuote
+                    }
+                    onClick={() => {
+                      setShowDialog(true);
+                      setCurrentStep(0);
+                      setSwapSteps((steps) =>
+                        steps.map((step, idx) => ({
+                          ...step,
+                          status: idx === 0 ? "active" : "pending",
+                        }))
+                      );
+                    }}
+                  >
+                    {isSubmitting || isLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Swapping...
+                      </>
+                    ) : (
+                      "Swap"
+                    )}
                   </Button>
                 )}
-            </div>
-
-
-            {/*/ Add exchange rate info if quote exists */}
-            {quoteResult && (
-              <div className="space-y-1">
-                <div className="text-sm text-muted-foreground text-center">
-                  1 {selectedTokenIn?.symbol} ≈ {quoteResult.exchangeRate.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 6
-                  })} {selectedTokenOut?.symbol}
-                </div>
-                <div className="text-xs text-center flex justify-center gap-2">
-                  <span className="text-muted-foreground">
-                    Slippage: {slippageValue.toFixed(1)}%
-                  </span>
-                  {quoteResult.priceImpactPct > 1 && (
-                    <span className={`${quoteResult.priceImpactPct > 3 ? 'text-red-500' : 'text-yellow-500'}`}>
-                      Price impact: {quoteResult.priceImpactPct.toFixed(2)}%
-                    </span>
-                  )}
-                </div>
               </div>
-            )}
-          </form>
-        </Form>
-      </CardContent>
-    </Card>
+
+              {/*/ Add exchange rate info if quote exists */}
+              {quoteResult && (
+                <div className="space-y-1">
+                  <div className="text-sm text-muted-foreground text-center">
+                    1 {selectedTokenIn?.symbol} ≈{" "}
+                    {quoteResult.exchangeRate.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 6,
+                    })}{" "}
+                    {selectedTokenOut?.symbol}
+                  </div>
+                  <div className="text-xs text-center flex justify-center gap-2">
+                    <span className="text-muted-foreground">
+                      Slippage: {slippageValue.toFixed(1)}%
+                    </span>
+                    {quoteResult.priceImpactPct > 1 && (
+                      <span
+                        className={`${
+                          quoteResult.priceImpactPct > 3
+                            ? "text-red-500"
+                            : "text-yellow-500"
+                        }`}
+                      >
+                        Price impact: {quoteResult.priceImpactPct.toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+      <StepFlowDialog
+        open={showDialog}
+        onOpenChange={setShowDialog}
+        title="Token Swap Process"
+        description="Swap your tokens through the following steps"
+        steps={swapSteps}
+        currentStep={currentStep}
+        onNext={async () => {
+          const nextStep = currentStep + 1;
+          // Only call swap in the confirmation step (step 3: Execute Swap)
+          if (swapSteps[nextStep - 1]?.title === "Execute Swap") {
+            await form.handleSubmit(onSubmit)();
+          }
+          setSwapSteps((steps) =>
+            steps.map((step, idx) => {
+              if (idx < nextStep) return { ...step, status: "completed" };
+              if (idx === nextStep) return { ...step, status: "active" };
+              return { ...step, status: "pending" };
+            })
+          );
+          setCurrentStep(nextStep);
+          if (nextStep >= swapSteps.length) setShowDialog(false);
+        }}
+        onPrevious={() => {
+          const prevStep = Math.max(currentStep - 1, 0);
+          setCurrentStep(prevStep);
+          setSwapSteps((steps) =>
+            steps.map((step, idx) => {
+              if (idx < prevStep) return { ...step, status: "completed" };
+              if (idx === prevStep) return { ...step, status: "active" };
+              return { ...step, status: "pending" };
+            })
+          );
+        }}
+        onCancel={() => {
+          setShowDialog(false);
+          setCurrentStep(0);
+          setSwapSteps((steps) =>
+            steps.map((step, idx) => ({
+              ...step,
+              status: idx === 0 ? "active" : "pending",
+            }))
+          );
+        }}
+        canGoPrevious={currentStep > 0}
+        canGoNext={currentStep < swapSteps.length - 1}
+        isLoading={isSubmitting}
+      />
+    </>
   );
 }
