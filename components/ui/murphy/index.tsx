@@ -38,6 +38,8 @@ import { HydraFanoutForm } from "./hydra-fanout-form";
 import { MPLHybridForm } from "./mpl-hybrid-form";
 import { TokenMetadataViewer } from "./token-metadata-viewer";
 import { TxnProgressSteps } from "@/components/ui/murphy/Txn-Feedback/txn-progress-steps";
+import { StepFlowDialog } from "@/components/ui/murphy/Txn-Feedback/step-flow-dialog";
+
 export {
   ConnectWalletButton,
   SendTokenForm,
@@ -80,4 +82,5 @@ export {
   MPLHybridForm,
   TokenMetadataViewer,
   TxnProgressSteps,
+  StepFlowDialog,
 };
