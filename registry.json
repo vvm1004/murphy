@@ -1413,6 +1413,20 @@
       ]
     },
     {
+      "name": "txn-progress-steps",
+      "type": "registry:block",
+      "title": "A visual step tracker for multi-step transaction workflows.",
+      "registryDependencies": [],
+      "dependencies": [],
+      "files": [
+        {
+          "path": "components/ui/murphy/Txn-Feedback/txn-progress-steps.tsx",
+          "type": "registry:file",
+          "target": "components/ui/murphy/Txn-Feedback/txn-progress-steps.tsx"
+        }
+      ]
+    },
+    {
       "name": "txn-settings",
       "type": "registry:block",
       "title": "The TxnSettings component is a popover that allows users to set the transaction priority, fee cap, and other transaction settings.",
