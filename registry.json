@@ -1431,6 +1431,22 @@
       ]
     },
     {
+      "name": "txn-retry-button",
+      "type": "registry:block",
+      "title": "A button component with built-in retry handling for transactions.",
+      "registryDependencies": [
+        "button"
+      ],
+      "dependencies": [],
+      "files": [
+        {
+          "path": "components/ui/murphy/Txn-Feedback/txn-retry-button.tsx",
+          "type": "registry:file",
+          "target": "components/ui/murphy/Txn-Feedback/txn-retry-button.tsx"
+        }
+      ]
+    },
+    {
       "name": "txn-settings",
       "type": "registry:block",
       "title": "The TxnSettings component is a popover that allows users to set the transaction priority, fee cap, and other transaction settings.",

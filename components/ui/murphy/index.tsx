@@ -38,6 +38,7 @@ import { HydraFanoutForm } from "./hydra-fanout-form";
 import { MPLHybridForm } from "./mpl-hybrid-form";
 import { TokenMetadataViewer } from "./token-metadata-viewer";
 import { TxnFeedbackToast } from "./Txn-Feedback/txn-feedback-toast";
+import { TxnRetryButton } from "./Txn-Feedback/txn-retry-button";
 
 export {
   ConnectWalletButton,
@@ -81,4 +82,5 @@ export {
   MPLHybridForm,
   TokenMetadataViewer,
   TxnFeedbackToast,
+  TxnRetryButton,
 };
