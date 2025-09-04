@@ -39,6 +39,7 @@ import { MPLHybridForm } from "./mpl-hybrid-form";
 import { TokenMetadataViewer } from "./token-metadata-viewer";
 import { TxnFeedbackToast } from "./Txn-Feedback/txn-feedback-toast";
 import { TxnRetryButton } from "./Txn-Feedback/txn-retry-button";
+import { TxnErrorFallback } from "./Txn-Feedback/txn-error-fallback";
 
 export {
   ConnectWalletButton,
@@ -83,4 +84,5 @@ export {
   TokenMetadataViewer,
   TxnFeedbackToast,
   TxnRetryButton,
+  TxnErrorFallback,
 };
